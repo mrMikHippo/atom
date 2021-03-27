@@ -1,8 +1,15 @@
-const { BrowserWindow, app, dialog, ipcMain } = require('electron');
+const {
+  BrowserWindow,
+  app,
+  dialog,
+  ipcMain,
+  nativeImage
+} = require('electron');
 const getAppName = require('../get-app-name');
 const path = require('path');
 const url = require('url');
 const { EventEmitter } = require('events');
+const { compose } = require('@hyurl/structured-clone');
 const StartupTime = require('../startup-time');
 
 const ICON_PATH = path.resolve(__dirname, '..', '..', 'resources', 'atom.png');
@@ -49,14 +56,20 @@ module.exports = class AtomWindow extends EventEmitter {
         // (Ref: https://github.com/atom/atom/pull/12696#issuecomment-290496960)
         disableBlinkFeatures: 'Auxclick',
         nodeIntegration: true,
-        webviewTag: true
+        webviewTag: true,
+
+        // TodoElectronIssue: remote module is deprecated https://www.electronjs.org/docs/breaking-changes#default-changed-enableremotemodule-defaults-to-false
+        enableRemoteModule: true,
+        // node support in threads
+        nodeIntegrationInWorker: true
       },
       simpleFullscreen: this.getSimpleFullscreen()
     };
 
     // Don't set icon on Windows so the exe's ico will be used as window and
     // taskbar's icon. See https://github.com/atom/atom/issues/4811 for more.
-    if (process.platform === 'linux') options.icon = ICON_PATH;
+    if (process.platform === 'linux')
+      options.icon = nativeImage.createFromPath(ICON_PATH);
     if (this.shouldAddCustomTitleBar()) options.titleBarStyle = 'hidden';
     if (this.shouldAddCustomInsetTitleBar())
       options.titleBarStyle = 'hiddenInset';
@@ -317,7 +330,19 @@ module.exports = class AtomWindow extends EventEmitter {
   }
 
   replaceEnvironment(env) {
-    this.browserWindow.webContents.send('environment', env);
+    const {
+      NODE_ENV,
+      NODE_PATH,
+      ATOM_HOME,
+      ATOM_DISABLE_SHELLING_OUT_FOR_ENVIRONMENT
+    } = env;
+
+    this.browserWindow.webContents.send('environment', {
+      NODE_ENV,
+      NODE_PATH,
+      ATOM_HOME,
+      ATOM_DISABLE_SHELLING_OUT_FOR_ENVIRONMENT
+    });
   }
 
   sendMessage(message, detail) {
@@ -350,7 +375,7 @@ module.exports = class AtomWindow extends EventEmitter {
   sendCommandToBrowserWindow(command, ...args) {
     const action =
       args[0] && args[0].contextCommand ? 'context-command' : 'command';
-    this.browserWindow.webContents.send(action, command, ...args);
+    this.browserWindow.webContents.send(action, command, compose(...args));
   }
 
   getDimensions() {
@@ -461,13 +486,13 @@ module.exports = class AtomWindow extends EventEmitter {
       options
     );
 
+    let promise = dialog.showSaveDialog(this.browserWindow, options);
     if (typeof callback === 'function') {
-      // Async
-      dialog.showSaveDialog(this.browserWindow, options, callback);
-    } else {
-      // Sync
-      return dialog.showSaveDialog(this.browserWindow, options);
+      promise = promise.then(({ filePath, bookmark }) => {
+        callback(filePath, bookmark);
+      });
     }
+    return promise;
   }
 
   toggleDevTools() {
